@@ -231,7 +231,7 @@ def train(model, encoder:du.Encoder.AbstractEncoder, trainDatasetX, trainDataset
     flowWeight = weightNormalIndex
     eps = 0.1
     
-    epochs = 100
+    epochs = 10000
     for epoch in tqdm(range(1, epochs+1)):
         model.train()
         optimizer.zero_grad()
@@ -249,7 +249,7 @@ def train(model, encoder:du.Encoder.AbstractEncoder, trainDatasetX, trainDataset
         if epoch % epochs == 0:
             # validation_mapping
             metrics  = validation_mapping(model, encoder, testDatasetX, testDatasetY, flowThreshold=flowThreshold, flowWeight=flowWeight)
-            print(f"total_acc: {metrics['total_acc']:.6f}")
+            print(f"\ntotal_acc: {metrics['total_acc']:.6f}")
             print(f"prob_abs_err: {metrics['prob_abs_err']:.6f}")
             # print(f"weighted_prob_abs_err: {metrics['weighted_prob_abs_err']:.6f}")
             print(f"TP: {metrics['TP']:.6f}")
@@ -464,7 +464,7 @@ def __testing():
     }
     
     # choose config
-    config = conifgSample2  # conifgSample1 / conifgSample2 / conifgSample3
+    config = conifgSample1  # conifgSample1 / conifgSample2 / conifgSample3
     readSize = 10000 # use how many data in training and testing. integer, -1~10000
     trainDatasetFilePath = config['trainDatasetFilePath']
     testDatasetFilePath = config['testDatasetFilePath']
