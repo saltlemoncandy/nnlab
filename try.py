@@ -8,6 +8,7 @@ import torch.nn as nn
 from torch.utils.data import DataLoader
 import timeit
 import time
+from tqdm import tqdm
 
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 # DEVICE = "cpu"
@@ -62,7 +63,7 @@ class BinaryModel(nn.Module):
             nn.ReLU()
         )
         self.dfnn_prob = nn.Sequential(
-            nn.Linear(hiddenDim + relDim, hiddenDim),
+            nn.Linear(hiddenDim, hiddenDim),
             nn.ReLU(),
             nn.Linear(hiddenDim, relDim),
             nn.Sigmoid()
@@ -71,10 +72,9 @@ class BinaryModel(nn.Module):
     def forward(self, x):
         # forward propagation
         hidden = self.dfnn_hidden(x)
-        prob = self.dfnn_prob(hidden)
+        y = self.dfnn_prob(hidden)
 
-        #return torch.stack((index,prob),dim=0)
-        return prob
+        return y
 
     
 def validation(model, encoder:du.Encoder.AbstractEncoder, validDatasetX, validDatasetY):
@@ -175,37 +175,42 @@ def validation_mapping(model, encoder:du.Encoder.AbstractEncoder, validDatasetX,
     with torch.no_grad():
         # Get model predictions
         batch_pred = model(validDatasetX.to(device=DEVICE, dtype=torch.float))
+
+        
         # batch_pred shape = [batch_size, encoder.getRelDim()] * 2
-        batch_pred_index = torch.round(batch_pred[0]).view(-1, outputSetSize, maxInputNum)
-        batch_pred_prob = batch_pred[1].view(-1, outputSetSize, maxInputNum)
+        # batch_pred_index = torch.round(batch_pred[0]).view(-1, outputSetSize, maxInputNum)
+        batch_pred_prob = batch_pred.view(-1)
         # batch_pred_index shape = [batch_size, outputSetSize, maxInputNum]
+
         
         # validDatasetY shape = [batch_size, encoder.getRelDim()] * 2
-        batch_true_index = validDatasetY[0].view(-1, outputSetSize, maxInputNum)
-        batch_true_prob = validDatasetY[1].view(-1, outputSetSize, maxInputNum)
-        # batch_true_index shape = [batch_size, outputSetSize, maxInputNum]
+        # batch_true_index = validDatasetY[0].view(-1, outputSetSize, maxInputNum)
+        batch_true_prob = validDatasetY[0].view(-1)
+
+        # print(batch_true_prob)
         
         #start = timeit.default_timer()
-        new_tensor = torch.where(torch.logical_or(batch_pred_index < 0, batch_pred_index >= inputSetSize), inputSetSize, batch_pred_index).to(device=DEVICE, dtype=torch.int64)
-        batch_pred_relation = torch.zeros((batch_size, outputSetSize, inputSetSize+1), dtype=torch.float).to(device=DEVICE, dtype=torch.float).scatter_(2, new_tensor, batch_pred_prob)[:,:, :-1]
+        # new_tensor = torch.where(torch.logical_or(batch_pred_index < 0, batch_pred_index >= inputSetSize), inputSetSize, batch_pred_index).to(device=DEVICE, dtype=torch.int64)
+        # batch_pred_relation = torch.zeros((batch_size, outputSetSize, inputSetSize+1), dtype=torch.float).to(device=DEVICE, dtype=torch.float).scatter_(2, new_tensor, batch_pred_prob)[:,:, :-1]
         
-        new_tensor = torch.where(torch.logical_or(batch_true_index < 0, batch_true_index >= inputSetSize), inputSetSize, batch_true_index).to(device=DEVICE, dtype=torch.int64)
-        batch_true_relation = torch.zeros((batch_size, outputSetSize, inputSetSize+1), dtype=torch.float).to(device=DEVICE, dtype=torch.float).scatter_(2, new_tensor, batch_true_prob)[:,:, :-1]
+        # new_tensor = torch.where(torch.logical_or(batch_true_index < 0, batch_true_index >= inputSetSize), inputSetSize, batch_true_index).to(device=DEVICE, dtype=torch.int64)
+        # batch_true_relation = torch.zeros((batch_size, outputSetSize, inputSetSize+1), dtype=torch.float).to(device=DEVICE, dtype=torch.float).scatter_(2, new_tensor, batch_true_prob)[:,:, :-1]
         
-        TP_sum = torch.sum((batch_true_relation > flowThreshold) & (batch_pred_relation > flowThreshold)).item() / inputSetSize / outputSetSize / batch_size
-        TN_sum = torch.sum((batch_true_relation <= flowThreshold) & (batch_pred_relation <= flowThreshold)).item() / inputSetSize / outputSetSize / batch_size
-        FP_sum = torch.sum((batch_true_relation <= flowThreshold) & (batch_pred_relation > flowThreshold)).item() / inputSetSize / outputSetSize / batch_size
-        FN_sum = torch.sum((batch_true_relation > flowThreshold) & (batch_pred_relation <= flowThreshold)).item() / inputSetSize / outputSetSize / batch_size
+        TP_sum = torch.sum((batch_true_prob > flowThreshold) & (batch_pred_prob > flowThreshold)).item() / inputSetSize / outputSetSize / batch_size
+        TN_sum = torch.sum((batch_true_prob <= flowThreshold) & (batch_pred_prob <= flowThreshold)).item() / inputSetSize / outputSetSize / batch_size
+        FP_sum = torch.sum((batch_true_prob <= flowThreshold) & (batch_pred_prob > flowThreshold)).item() / inputSetSize / outputSetSize / batch_size
+        FN_sum = torch.sum((batch_true_prob > flowThreshold) & (batch_pred_prob <= flowThreshold)).item() / inputSetSize / outputSetSize / batch_size
         
         
-        prob_abs_err = torch.mean(torch.abs(batch_true_relation - batch_pred_relation))
-        weights = torch.where(batch_true_relation > flowThreshold, flowWeight, 1.0)
-        weighted_prob_abs_err = torch.sum(torch.abs(batch_true_relation - batch_pred_relation) * weights) / torch.sum(weights)
+        prob_abs_err = torch.mean(torch.abs(batch_true_prob - batch_pred_prob))
+        # weights = torch.where(batch_true_relation > flowThreshold, flowWeight, 1.0)
+        # weighted_prob_abs_err = torch.sum(torch.abs(batch_true_relation - batch_pred_relation) * weights) / torch.sum(weights)
         
         index_acc = TP_sum + TN_sum
         #end = timeit.default_timer()
         #print(f"Time taken is {end - start}s")
-        metrics = {"index_acc": index_acc, "prob_abs_err": prob_abs_err, "weighted_prob_abs_err": weighted_prob_abs_err,
+        metrics = {"total_acc": index_acc, "prob_abs_err": prob_abs_err,
+                    # "weighted_prob_abs_err": weighted_prob_abs_err,
                 "FP": FP_sum, "FN": FN_sum, "TP": TP_sum, "TN": TN_sum}
     return metrics
 
@@ -219,38 +224,34 @@ def train(model, encoder:du.Encoder.AbstractEncoder, trainDatasetX, trainDataset
     print(f'null_index_count = {null_index_count}')
     print(f'normal_index_count = {normal_index_count}')
     weightNormalIndex = float(null_index_count) / normal_index_count * 10
-    #index_loss_fn = nn.MSELoss()
-    # index_loss_fn = WeightedMSELoss(du.Encoder.BinaryEntryEncoder.NULL_INDEX, weightNormalIndex)
-    #prob_loss_fn = nn.BCELoss()
+
     prob_loss_fn = WeightedBCELoss(weightNormalIndex)
     optimizer = torch.optim.Adam(model.parameters(), lr=0.01)
     flowThreshold = 0.01
     flowWeight = weightNormalIndex
     eps = 0.1
     
-    epochs = 5000
-    for epoch in range(1, epochs+1):
+    epochs = 100
+    for epoch in tqdm(range(1, epochs+1)):
         model.train()
         optimizer.zero_grad()
         # forward
         outputs = model(trainDatasetX)
-        #loss_index = index_loss_fn(process_output(outputs[0],eps), trainDatasetY[0])
-        # loss_index = index_loss_fn(outputs[0], trainDatasetY[0])
-        loss_prob = prob_loss_fn(outputs[1], trainDatasetY[1])
-        loss = loss_prob
+        loss = prob_loss_fn(outputs, trainDatasetY[0])
+        # loss = loss_prob
         # backward
         loss.backward()
         optimizer.step()
 
-        if epoch % 100 == 0:
-            print(f'Epoch [{epoch}/{epochs}], Loss: {loss.item():.3f}, loss_prob: {loss_prob.item():.3f}')
+        # if epoch % 100 == 0:
+            # print(f'Epoch [{epoch}/{epochs}], Loss: {loss.item():.3f}')
         
         if epoch % epochs == 0:
             # validation_mapping
             metrics  = validation_mapping(model, encoder, testDatasetX, testDatasetY, flowThreshold=flowThreshold, flowWeight=flowWeight)
-            print(f"index_acc: {metrics['index_acc']:.6f}")
+            print(f"total_acc: {metrics['total_acc']:.6f}")
             print(f"prob_abs_err: {metrics['prob_abs_err']:.6f}")
-            print(f"weighted_prob_abs_err: {metrics['weighted_prob_abs_err']:.6f}")
+            # print(f"weighted_prob_abs_err: {metrics['weighted_prob_abs_err']:.6f}")
             print(f"TP: {metrics['TP']:.6f}")
             print(f"TN: {metrics['TN']:.6f}")
             print(f"FP: {metrics['FP']:.6f}")
@@ -351,8 +352,6 @@ class WeightedBCELoss(nn.Module):
         loss = torch.sum(weightedBCELoss) / totalWeight
         return loss
 
-class WeightedBinBrossEntropy(nn.Module):
-    pass
 
 
 class InformationFlowDataset(torch.utils.data.Dataset):
@@ -465,7 +464,7 @@ def __testing():
     }
     
     # choose config
-    config = conifgSample3  # conifgSample1 / conifgSample2 / conifgSample3
+    config = conifgSample2  # conifgSample1 / conifgSample2 / conifgSample3
     readSize = 10000 # use how many data in training and testing. integer, -1~10000
     trainDatasetFilePath = config['trainDatasetFilePath']
     testDatasetFilePath = config['testDatasetFilePath']
@@ -555,9 +554,9 @@ def __testing():
         caseIndices = [0]  # [...]
         for caseIndex in caseIndices:
             print(f'case {caseIndex}: ')
-            print(torch.round(test_outputs[0][caseIndex]).view(-1, outputSetSize, maxInputNum))
-            print(testDatasetY[0][caseIndex].view(-1, outputSetSize, maxInputNum))
-            print(test_outputs[1][caseIndex].view(-1, outputSetSize, maxInputNum))
-            print(testDatasetY[1][caseIndex].view(-1, outputSetSize, maxInputNum))
+            print(torch.round(test_outputs[caseIndex]).view(-1))
+            print(testDatasetY[0][caseIndex].view(-1))
+            # print(test_outputs[1][caseIndex].view(-1))
+            # print(testDatasetY[1][caseIndex].view(-1))
         
 __testing()
