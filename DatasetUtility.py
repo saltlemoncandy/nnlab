@@ -1,7 +1,7 @@
 import logging
 from abc import ABC, abstractmethod
 import numpy as np
-import io, math, random, string
+import io, math, random, string, re
 from enum import Enum
 
 class DatasetUtility:
@@ -26,15 +26,20 @@ class DatasetUtility:
         
         def putRelation(self, outputIndex:int, inputIndex:int, prob=1.0):
             self.__relSet[outputIndex].append((inputIndex, prob))
-            return
+            return 
 
         # still not be tested
+        # Warning: nonFloat inputValue cannot contain ':'
         @staticmethod
-        def createFromTextFormat(text:str, inputSetSize:int, outputSetSize:int):
+        def createFromTextFormat(text:str, inputSetSize:int, outputSetSize:int, nonFloatIndices:list[int]=[]):
             entry = DatasetUtility.Entry(inputSetSize, outputSetSize)
             textSplit = text.split(":")
             for inputIndex, inputValue in enumerate(filter(None,textSplit[0].split(" "))):
-                entry.putInputValue(inputIndex, float(inputValue))
+                if inputIndex in nonFloatIndices:
+                    entry.putInputValue(inputIndex, inputValue)
+                else:
+                    entry.putInputValue(inputIndex, float(inputValue))
+                    
             for i in range(1, len(textSplit)-1):
                 outputIndex = i-1
                 for relStr in filter(None,textSplit[i].split(" ")):
@@ -155,6 +160,8 @@ class DatasetUtility:
         RANDOM = 1
         IMPERFECT = 2
         PERFECT = 3
+        IMPERFECT_TEXT = 4
+        PERFECT_TEXT = 5
     
     @staticmethod
     def GenSample3Data(outputFilePath:str, trainingDataNum:int,
@@ -200,8 +207,12 @@ class DatasetUtility:
         I = {key, text, src1, src2, src3}
         O = {sink1, sink2, sink3}
         '''
+        randomData = random.Random()
+        randomSpecial = random.Random()  # for PERFECT_TEXT and IMPERFECT_TEXT
         if seed is not None:
-            random.seed(seed)
+            randomData.seed(seed)
+            randomSpecial.seed(seed)
+            
         inputSetDict = {"key":0,"text":1,"src1":2, "src2":3, "src3":4}
         outputSetDict = {"sink1":0,"sink2":1,"sink3":2}
         outputFile = None
@@ -210,29 +221,36 @@ class DatasetUtility:
             charactersSet = string.ascii_letters + string.digits
             textMinLen = 10
             textMaxLen = 30
+            specialTextList = [''.join(randomSpecial.choice(charactersSet) for _ in range(randomSpecial.randrange(textMinLen, textMaxLen))) for _ in range(8)] # for PERFECT_TEXT and IMPERFECT_TEXT
+            
             for i in range(trainingDataNum):
                 entry = DatasetUtility.Entry(len(inputSetDict), len(outputSetDict))          
-                key = random.randrange(DatasetUtility.RandomIntMin, DatasetUtility.RandomIntMax)
+                key = randomData.randrange(DatasetUtility.RandomIntMin, DatasetUtility.RandomIntMax)
                 
-                textLen = random.randrange(textMinLen, textMaxLen)
-                text = ''.join(random.choice(charactersSet) for _ in range(textLen))
+                textLen = randomData.randrange(textMinLen, textMaxLen)
+                text = ''.join(randomData.choice(charactersSet) for _ in range(textLen))
                 emb = 0
                 for c in text:
                     emb = (emb*key + ord(c)) % 8
-                    
+                
                 match(embText):
                     case DatasetUtility.EmbText.NONE:
                         pass
                     case DatasetUtility.EmbText.RANDOM:
                         text = float(hash(text)) % 100
                     case DatasetUtility.EmbText.IMPERFECT:
-                        text = random.gauss(emb, 1)
+                        text = randomData.gauss(emb, 1)
                     case DatasetUtility.EmbText.PERFECT:
                         text = float(emb)
+                    case DatasetUtility.EmbText.IMPERFECT_TEXT:
+                        # only change last character
+                        text = specialTextList[emb][:-1] + randomSpecial.choice(charactersSet)
+                    case DatasetUtility.EmbText.PERFECT_TEXT:
+                        text = specialTextList[emb]
                     
-                src1 = random.randrange(DatasetUtility.RandomIntMin, DatasetUtility.RandomIntMax)
-                src2 = random.randrange(DatasetUtility.RandomIntMin, DatasetUtility.RandomIntMax)
-                src3 = random.randrange(DatasetUtility.RandomIntMin, DatasetUtility.RandomIntMax)
+                src1 = randomData.randrange(DatasetUtility.RandomIntMin, DatasetUtility.RandomIntMax)
+                src2 = randomData.randrange(DatasetUtility.RandomIntMin, DatasetUtility.RandomIntMax)
+                src3 = randomData.randrange(DatasetUtility.RandomIntMin, DatasetUtility.RandomIntMax)
 
                 entry.putInputValue(inputSetDict.get("key"), float(key))
                 entry.putInputValue(inputSetDict.get("text"), text)
@@ -268,19 +286,22 @@ class DatasetUtility:
 class Encoder:
     class AbstractEncoder(ABC):
         DEFAULT_PROB = 0.0
-        def __init__(self, inputSetSize, outputSetSize,
+        def __init__(self, inputSetSize, outputSetSize, nonFloatIndices = None,
                     inputSetSelectedIndices = None, outputSetSelectedIndices = None
                     ) -> None:
             self._inputSetSize = inputSetSize
             self._outputSetSize = outputSetSize
+            self._nonFloatIndices = nonFloatIndices if nonFloatIndices is not None else []
             self._inputSetSelectedIndices = inputSetSelectedIndices if inputSetSelectedIndices is not None else list(range(inputSetSize))
             self._outputSetSelectedIndices = outputSetSelectedIndices if outputSetSelectedIndices is not None else list(range(outputSetSize))
-        
+
         def getInputSetSize(self)->int:
             return self._inputSetSize
         def getOutputSetSize(self)->int:
             return self._outputSetSize
-
+        def getVariableLenInputNum(self)->int:
+            return len(self._nonFloatIndices)
+        
         @abstractmethod
         def encode(self, entry:DatasetUtility.Entry)->np.ndarray:
             pass
@@ -296,15 +317,27 @@ class Encoder:
         @abstractmethod
         def getRelDim(self)->int:
             pass
+        
+        
 
     class BinaryEntryEncoder(AbstractEncoder):
-        NULL_INDEX = -1.0
-        def __init__(self, inputSetSize, outputSetSize, inputSetSelectedIndices = None, outputSetSelectedIndices = None) -> None:
-            super().__init__(inputSetSize, outputSetSize, inputSetSelectedIndices, outputSetSelectedIndices)
+        def __init__(self, inputSetSize, outputSetSize, nonFloatIndices:list[int] = None, inputSetSelectedIndices = None, outputSetSelectedIndices = None) -> None:
+            super().__init__(inputSetSize, outputSetSize, nonFloatIndices, inputSetSelectedIndices, outputSetSelectedIndices)
             return
         
         def encode(self, entry:DatasetUtility.Entry)->np.ndarray:
-            x = np.array(entry._Entry__inputValueSet, dtype='float32')
+            fixedLenInputs = []
+            variableLenInputs = []
+            for inputIndex, inputValue in enumerate(entry._Entry__inputValueSet):
+                if inputIndex in self._nonFloatIndices:
+                    variableLenInputs.append(inputValue)
+                else:
+                    fixedLenInputs.append(inputValue)
+            fixedLenInputs = np.array(fixedLenInputs, dtype='float32')
+            for i in range(len(variableLenInputs)):
+                byteArray = bytes(variableLenInputs[i], encoding='utf-8')
+                variableLenInputs[i] = np.array([int(byte) for byte in byteArray], dtype='int32')
+            #x = np.array(entry._Entry__inputValueSet, dtype='float32')
             y = np.zeros((self._outputSetSize, self._inputSetSize), dtype='float32')
             for outputIndex in range(self._outputSetSize):
                 if outputIndex not in self._outputSetSelectedIndices:
@@ -315,9 +348,10 @@ class Encoder:
                         continue
                     y[outputIndex][inputIndex] = prob
             y = y.flatten()
-            return (x,[y])
+            return ([fixedLenInputs,*variableLenInputs],[y])
         
         def decode(self, encoded_entry:np.ndarray)->DatasetUtility.Entry:
+            # not implemented now
             pass
         
         def getInputDim(self)->int:
@@ -328,14 +362,25 @@ class Encoder:
 
     class SparseEntryEncoder(AbstractEncoder):
         NULL_INDEX = -1.0
-        def __init__(self, inputSetSize, outputSetSize, inputSetSelectedIndices = None, outputSetSelectedIndices = None,
+        def __init__(self, inputSetSize:int, outputSetSize:int, nonFloatIndices:list[int] = None, inputSetSelectedIndices:list[int] = None, outputSetSelectedIndices:list[int] = None,
                     maxInputNum:int = 1) -> None:
-            super().__init__(inputSetSize, outputSetSize, inputSetSelectedIndices, outputSetSelectedIndices)
+            super().__init__(inputSetSize, outputSetSize, nonFloatIndices, inputSetSelectedIndices, outputSetSelectedIndices)
             self._maxInputNum = maxInputNum
             return
         
         def encode(self, entry:DatasetUtility.Entry)->np.ndarray:
-            x = np.array(entry._Entry__inputValueSet, dtype='float32')
+            fixedLenInputs = []
+            variableLenInputs = []
+            for inputIndex, inputValue in enumerate(entry._Entry__inputValueSet):
+                if inputIndex in self._nonFloatIndices:
+                    variableLenInputs.append(inputValue)
+                else:
+                    fixedLenInputs.append(inputValue)
+            fixedLenInputs = np.array(fixedLenInputs, dtype='float32')
+            for i in range(len(variableLenInputs)):
+                byteArray = bytes(variableLenInputs[i], encoding='utf-8')
+                variableLenInputs[i] = np.array([int(byte) for byte in byteArray], dtype='int32')
+            # x = np.array(entry._Entry__inputValueSet, dtype='float32')
             y_index = np.full((self._outputSetSize,self._maxInputNum), Encoder.SparseEntryEncoder.NULL_INDEX, dtype='float32')
             y_prob = np.full((self._outputSetSize,self._maxInputNum), Encoder.SparseEntryEncoder.DEFAULT_PROB, dtype='float32')
             for outputIndex in range(self._outputSetSize):
@@ -355,7 +400,7 @@ class Encoder:
                     y_prob[outputIndex][index] = prob
             y_index = y_index.flatten()
             y_prob = y_prob.flatten()
-            return (x,[y_index,y_prob])
+            return ([fixedLenInputs,*variableLenInputs],[y_index,y_prob])
         
         def decode(self, encoded_entry:np.ndarray)->DatasetUtility.Entry:
             # encoded_entry = array of [index, prob] 
@@ -378,6 +423,7 @@ class Encoder:
         
         def getMaxInputNum(self)->int:
             return self._maxInputNum
+        
 
 def __testing():
     datasetSize = 10000
@@ -405,4 +451,4 @@ def __testing():
         DatasetUtility.GenSample3Data(f"./dataset/sample3/train_seed{trainSeed}_{embText.name}.dataset", datasetSize, seed=trainSeed, embText=embText)
         DatasetUtility.GenSample3Data(f"./dataset/sample3/test_seed{testSeed}_{embText.name}.dataset", datasetSize, seed=testSeed, embText=embText)
 
-#__testing()
+__testing()

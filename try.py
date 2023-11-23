@@ -16,12 +16,31 @@ torch.set_printoptions(threshold=float('inf'))
 
 class SparseModel(nn.Module):
     def __init__(self, encoder:du.Encoder.AbstractEncoder,
-                 hiddenDim): 
+                 hiddenDim, embedding_dim
+                 ): 
         super(SparseModel, self).__init__()
         self.encoder = encoder
-        inputDim = encoder.getInputDim()
+        variableLenInputNum = encoder.getVariableLenInputNum()
+        
+        inputDim = encoder.getInputDim() - variableLenInputNum + variableLenInputNum * embedding_dim
         relDim = encoder.getRelDim()
-        # network layer
+        ### network layer
+        
+        # embedding
+        self.embedding = []
+        
+        # LSTM
+        self.lstm = []
+        for i in range(variableLenInputNum):
+            self.embedding.append(nn.Embedding(256, embedding_dim, device=DEVICE))
+            self.lstm.append(nn.LSTM(
+                input_size=embedding_dim,
+                hidden_size=embedding_dim,
+                num_layers=1,
+                device=DEVICE
+            ))
+        
+        # DFNN
         self.dfnn_hidden = nn.Sequential(
             nn.Linear(inputDim, hiddenDim),
             nn.ReLU(),
@@ -41,7 +60,39 @@ class SparseModel(nn.Module):
         
     def forward(self, x):
         # forward propagation
-        hidden = self.dfnn_hidden(x)
+        FixedLengthInputs = x[0]
+        variableLenInputs = x[1:]
+        embeddedLSTMInputs = [FixedLengthInputs]
+        #print(f"{FixedLengthInputs}")
+        #print(f"{variableLenInputs}")
+        assert(len(variableLenInputs) == self.encoder.getVariableLenInputNum())
+        for i,variableLenInput in enumerate(variableLenInputs):
+            seqLen = (variableLenInput == 0).to(dtype=torch.int32, device=DEVICE).argmax(dim=1)
+            #seqLen = torch.sum(variableLenInput == 0, dim=1).to(device=DEVICE)
+            seqLenUnsqueeze = seqLen.unsqueeze(1)
+            embedded = self.embedding[i](variableLenInput)
+            #print(f"embedded: {embedded}")
+            
+            """
+            simple character embbedding
+            """
+            mask = torch.arange(embedded.size(1), device=DEVICE) < seqLenUnsqueeze
+            embeddedLSTMInput = torch.sum(embedded * mask.unsqueeze(2), dim=1) / seqLenUnsqueeze
+            
+            """
+            LSTM embedding
+            """
+            '''
+            embeddedLSTMInput, _ = self.lstm[i](embedded,None)
+            embeddedLSTMInput = embeddedLSTMInput[range(embeddedLSTMInput.shape[0]), seqLen-1,:]
+            '''
+            
+            #print(f"embeddedLSTMInput: {embeddedLSTMInput}")
+            embeddedLSTMInputs.append(embeddedLSTMInput)
+        #print(f"embeddedLSTMInputs: {embeddedLSTMInputs}")
+        cat = torch.cat(embeddedLSTMInputs,dim=1)
+        #print(f"cat: {cat}")
+        hidden = self.dfnn_hidden(cat)
         index = self.dfnn_index(hidden)
         prob = self.dfnn_prob(torch.cat((hidden, index),dim=1))
 
@@ -219,10 +270,11 @@ def train(model, encoder:du.Encoder.AbstractEncoder, trainDatasetX, trainDataset
     # loss function and optimizer
     #null_index_count = torch.sum(torch.eq(trainDatasetY[0], -1)).item()
     #normal_index_count = trainDatasetY[0].numel() - null_index_count
+
     null_index_count = 90000
     normal_index_count = 30000
-    print(f'null_index_count = {null_index_count}')
-    print(f'normal_index_count = {normal_index_count}')
+    # print(f'null_index_count = {null_index_count}')
+    # print(f'normal_index_count = {normal_index_count}')
     weightNormalIndex = float(null_index_count) / normal_index_count * 10
 
     prob_loss_fn = WeightedBCELoss(weightNormalIndex)
@@ -231,7 +283,7 @@ def train(model, encoder:du.Encoder.AbstractEncoder, trainDatasetX, trainDataset
     flowWeight = weightNormalIndex
     eps = 0.1
     
-    epochs = 10000
+    epochs = 1000
     for epoch in tqdm(range(1, epochs+1)):
         model.train()
         optimizer.zero_grad()
@@ -442,7 +494,7 @@ def __testing():
     }
     
     # sample 2
-    arrayLen = 100   # 10 / 100
+    arrayLen = 10   # 10 / 100
     interval = 3    # 1 / 2 / 3
     conifgSample2 = {
         'trainDatasetFilePath': f"dataset/sample2/train_intRange_arrayLen{arrayLen}_interval{interval}.dataset",
@@ -454,7 +506,7 @@ def __testing():
     
     # sample 3
     seed = 0
-    emb = 'IMPERFECT'  # PERFECT / IMPERFECT / RANDOM
+    emb = 'RANDOM'  # PERFECT / IMPERFECT / RANDOM
     conifgSample3 = {
         'trainDatasetFilePath': f"dataset/sample3/train_seed{seed}_{emb}.dataset",
         'testDatasetFilePath': f"dataset/sample3/train_seed{seed}_{emb}.dataset",
@@ -465,7 +517,7 @@ def __testing():
     
     # choose config
     config = conifgSample1  # conifgSample1 / conifgSample2 / conifgSample3
-    readSize = 10000 # use how many data in training and testing. integer, -1~10000
+    readSize = 1000 # use how many data in training and testing. integer, -1~10000
     trainDatasetFilePath = config['trainDatasetFilePath']
     testDatasetFilePath = config['testDatasetFilePath']
     inputSetSize, outputSetSize = config['inputSetSize'], config['outputSetSize']
@@ -552,10 +604,11 @@ def __testing():
         #rounded_test_outputs = torch.round(process_output(test_outputs[0][0],eps))
         ''' show some case '''
         caseIndices = [0]  # [...]
-        for caseIndex in caseIndices:
-            print(f'case {caseIndex}: ')
-            print(torch.round(test_outputs[caseIndex]).view(-1))
-            print(testDatasetY[0][caseIndex].view(-1))
+        # for caseIndex in caseIndices:
+            # print(f'case {caseIndex}: ')
+            # print(torch.round(test_outputs[caseIndex]).view(-1))
+            # print(testDatasetY[0][caseIndex].view(-1))
+
             # print(test_outputs[1][caseIndex].view(-1))
             # print(testDatasetY[1][caseIndex].view(-1))
         
