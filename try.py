@@ -452,7 +452,7 @@ def __testing():
     
     # sample 3
     seed = 0
-    emb = 'PERFECT_TEXT'  # PERFECT / IMPERFECT / RANDOM / NONE / PERFECT_TEXT / IMPERFECT_TEXT
+    emb = 'IMPERFECT_TEXT'  # PERFECT / IMPERFECT / RANDOM / NONE / PERFECT_TEXT / IMPERFECT_TEXT
     conifgSample3 = {
         'trainDatasetFilePath': f"dataset/sample3/train_seed{seed}_{emb}.dataset",
         'testDatasetFilePath': f"dataset/sample3/train_seed{seed}_{emb}.dataset",

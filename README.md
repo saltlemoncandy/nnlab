@@ -3,6 +3,8 @@
 2. Change every sparse->binary
 3. create a new class binarycrossentropy
 
+###  11/24
+1. finish binary config3 embedding
 
 # Description
 ### 動機與目的：
