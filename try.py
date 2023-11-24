@@ -13,19 +13,17 @@ from tqdm import tqdm
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 # DEVICE = "cpu"
 torch.set_printoptions(threshold=float('inf'))
-
-class SparseModel(nn.Module):
+   
+class BinaryModel(nn.Module):
     def __init__(self, encoder:du.Encoder.AbstractEncoder,
-                 hiddenDim, embedding_dim
-                 ): 
-        super(SparseModel, self).__init__()
+                 hiddenDim, embedding_dim): 
+        super(BinaryModel, self).__init__()
         self.encoder = encoder
         variableLenInputNum = encoder.getVariableLenInputNum()
-        
+
         inputDim = encoder.getInputDim() - variableLenInputNum + variableLenInputNum * embedding_dim
         relDim = encoder.getRelDim()
-        ### network layer
-        
+
         # embedding
         self.embedding = []
         
@@ -39,27 +37,22 @@ class SparseModel(nn.Module):
                 num_layers=1,
                 device=DEVICE
             ))
-        
-        # DFNN
+
+        # network layer
         self.dfnn_hidden = nn.Sequential(
             nn.Linear(inputDim, hiddenDim),
             nn.ReLU(),
             nn.Linear(hiddenDim, hiddenDim),
             nn.ReLU()
         )
-        self.dfnn_index = nn.Sequential(
-            nn.Linear(hiddenDim, relDim),
-            nn.LeakyReLU(),
-        )
         self.dfnn_prob = nn.Sequential(
-            nn.Linear(hiddenDim + relDim, hiddenDim),
+            nn.Linear(hiddenDim, hiddenDim),
             nn.ReLU(),
             nn.Linear(hiddenDim, relDim),
             nn.Sigmoid()
         )
-        
+
     def forward(self, x):
-        # forward propagation
         FixedLengthInputs = x[0]
         variableLenInputs = x[1:]
         embeddedLSTMInputs = [FixedLengthInputs]
@@ -91,38 +84,8 @@ class SparseModel(nn.Module):
             embeddedLSTMInputs.append(embeddedLSTMInput)
         #print(f"embeddedLSTMInputs: {embeddedLSTMInputs}")
         cat = torch.cat(embeddedLSTMInputs,dim=1)
-        #print(f"cat: {cat}")
-        hidden = self.dfnn_hidden(cat)
-        index = self.dfnn_index(hidden)
-        prob = self.dfnn_prob(torch.cat((hidden, index),dim=1))
-
-        #return torch.stack((index,prob),dim=0)
-        return [index, prob]
-    
-class BinaryModel(nn.Module):
-    def __init__(self, encoder:du.Encoder.AbstractEncoder,
-                 hiddenDim): 
-        super(BinaryModel, self).__init__()
-        self.encoder = encoder
-        inputDim = encoder.getInputDim()
-        relDim = encoder.getRelDim()
-        # network layer
-        self.dfnn_hidden = nn.Sequential(
-            nn.Linear(inputDim, hiddenDim),
-            nn.ReLU(),
-            nn.Linear(hiddenDim, hiddenDim),
-            nn.ReLU()
-        )
-        self.dfnn_prob = nn.Sequential(
-            nn.Linear(hiddenDim, hiddenDim),
-            nn.ReLU(),
-            nn.Linear(hiddenDim, relDim),
-            nn.Sigmoid()
-        )
-
-    def forward(self, x):
         # forward propagation
-        hidden = self.dfnn_hidden(x)
+        hidden = self.dfnn_hidden(cat)
         y = self.dfnn_prob(hidden)
 
         return y
@@ -137,8 +100,6 @@ def validation(model, encoder:du.Encoder.AbstractEncoder, validDatasetX, validDa
     FP_sum,FN_sum = 0.0, 0.0
     TP_sum,TN_sum = 0.0, 0.0
     batch_size = validDatasetX.shape[0]
-    #print(f"batchsize = {validDatasetX.shape[0]}")
-    #print(f"batchsize = {len(validDatasetY)}")
     
     inputSetSize = encoder.getInputSetSize()
     outputSetSize = encoder.getOutputSetSize()
@@ -146,7 +107,6 @@ def validation(model, encoder:du.Encoder.AbstractEncoder, validDatasetX, validDa
     with torch.no_grad():
         # Get model predictions
         batch_pred = model(validDatasetX.to(device=DEVICE, dtype=torch.float))
-        # batch_pred shape = [batch_size, encoder.getRelDim()] * 2
         batch_pred_index = torch.round(batch_pred[0]).view(-1, outputSetSize, maxInputNum)
         batch_pred_index = torch.where(torch.logical_or(batch_pred_index < 0, batch_pred_index >= inputSetSize), du.Encoder.SparseEntryEncoder.NULL_INDEX, batch_pred_index)
         batch_pred_prob = batch_pred[1].view(-1, outputSetSize, maxInputNum)
@@ -209,14 +169,14 @@ def validation(model, encoder:du.Encoder.AbstractEncoder, validDatasetX, validDa
 def validation_mapping(model, encoder:du.Encoder.AbstractEncoder, validDatasetX, validDatasetY,
                        flowThreshold:float = 0.01, flowWeight:float = 1.0):
     '''
-    \n faster implementation
-    \n batch mode has not been implemented yet
+    faster implementation
+    batch mode has not been implemented yet
     '''
     model.eval()
     prob_abs_err = 0.0
     FP_sum,FN_sum = 0.0, 0.0
     TP_sum,TN_sum = 0.0, 0.0
-    batch_size = validDatasetX.shape[0]
+    batch_size = validDatasetX[0].shape[0]
     #print(f"batchsize = {validDatasetX.shape[0]}")
     #print(f"batchsize = {len(validDatasetY)}")
     
@@ -225,8 +185,7 @@ def validation_mapping(model, encoder:du.Encoder.AbstractEncoder, validDatasetX,
     # maxInputNum = encoder.getMaxInputNum()
     with torch.no_grad():
         # Get model predictions
-        batch_pred = model(validDatasetX.to(device=DEVICE, dtype=torch.float))
-
+        batch_pred = model(validDatasetX)
         
         # batch_pred shape = [batch_size, encoder.getRelDim()] * 2
         # batch_pred_index = torch.round(batch_pred[0]).view(-1, outputSetSize, maxInputNum)
@@ -238,14 +197,6 @@ def validation_mapping(model, encoder:du.Encoder.AbstractEncoder, validDatasetX,
         # batch_true_index = validDatasetY[0].view(-1, outputSetSize, maxInputNum)
         batch_true_prob = validDatasetY[0].view(-1)
 
-        # print(batch_true_prob)
-        
-        #start = timeit.default_timer()
-        # new_tensor = torch.where(torch.logical_or(batch_pred_index < 0, batch_pred_index >= inputSetSize), inputSetSize, batch_pred_index).to(device=DEVICE, dtype=torch.int64)
-        # batch_pred_relation = torch.zeros((batch_size, outputSetSize, inputSetSize+1), dtype=torch.float).to(device=DEVICE, dtype=torch.float).scatter_(2, new_tensor, batch_pred_prob)[:,:, :-1]
-        
-        # new_tensor = torch.where(torch.logical_or(batch_true_index < 0, batch_true_index >= inputSetSize), inputSetSize, batch_true_index).to(device=DEVICE, dtype=torch.int64)
-        # batch_true_relation = torch.zeros((batch_size, outputSetSize, inputSetSize+1), dtype=torch.float).to(device=DEVICE, dtype=torch.float).scatter_(2, new_tensor, batch_true_prob)[:,:, :-1]
         
         TP_sum = torch.sum((batch_true_prob > flowThreshold) & (batch_pred_prob > flowThreshold)).item() / inputSetSize / outputSetSize / batch_size
         TN_sum = torch.sum((batch_true_prob <= flowThreshold) & (batch_pred_prob <= flowThreshold)).item() / inputSetSize / outputSetSize / batch_size
@@ -258,8 +209,6 @@ def validation_mapping(model, encoder:du.Encoder.AbstractEncoder, validDatasetX,
         # weighted_prob_abs_err = torch.sum(torch.abs(batch_true_relation - batch_pred_relation) * weights) / torch.sum(weights)
         
         index_acc = TP_sum + TN_sum
-        #end = timeit.default_timer()
-        #print(f"Time taken is {end - start}s")
         metrics = {"total_acc": index_acc, "prob_abs_err": prob_abs_err,
                     # "weighted_prob_abs_err": weighted_prob_abs_err,
                 "FP": FP_sum, "FN": FN_sum, "TP": TP_sum, "TN": TN_sum}
@@ -268,13 +217,10 @@ def validation_mapping(model, encoder:du.Encoder.AbstractEncoder, validDatasetX,
 
 def train(model, encoder:du.Encoder.AbstractEncoder, trainDatasetX, trainDatasetY, testDatasetX, testDatasetY):
     # loss function and optimizer
-    #null_index_count = torch.sum(torch.eq(trainDatasetY[0], -1)).item()
-    #normal_index_count = trainDatasetY[0].numel() - null_index_count
-
     null_index_count = 90000
     normal_index_count = 30000
-    # print(f'null_index_count = {null_index_count}')
-    # print(f'normal_index_count = {normal_index_count}')
+    print(f'null_index_count = {null_index_count}')
+    print(f'normal_index_count = {normal_index_count}')
     weightNormalIndex = float(null_index_count) / normal_index_count * 10
 
     prob_loss_fn = WeightedBCELoss(weightNormalIndex)
@@ -283,7 +229,7 @@ def train(model, encoder:du.Encoder.AbstractEncoder, trainDatasetX, trainDataset
     flowWeight = weightNormalIndex
     eps = 0.1
     
-    epochs = 1000
+    epochs = 5000
     for epoch in tqdm(range(1, epochs+1)):
         model.train()
         optimizer.zero_grad()
@@ -301,7 +247,7 @@ def train(model, encoder:du.Encoder.AbstractEncoder, trainDatasetX, trainDataset
         if epoch % epochs == 0:
             # validation_mapping
             metrics  = validation_mapping(model, encoder, testDatasetX, testDatasetY, flowThreshold=flowThreshold, flowWeight=flowWeight)
-            print(f"\ntotal_acc: {metrics['total_acc']:.6f}")
+            print(f"total_acc: {metrics['total_acc']:.6f}")
             print(f"prob_abs_err: {metrics['prob_abs_err']:.6f}")
             # print(f"weighted_prob_abs_err: {metrics['weighted_prob_abs_err']:.6f}")
             print(f"TP: {metrics['TP']:.6f}")
@@ -494,7 +440,7 @@ def __testing():
     }
     
     # sample 2
-    arrayLen = 10   # 10 / 100
+    arrayLen = 100   # 10 / 100
     interval = 3    # 1 / 2 / 3
     conifgSample2 = {
         'trainDatasetFilePath': f"dataset/sample2/train_intRange_arrayLen{arrayLen}_interval{interval}.dataset",
@@ -506,21 +452,25 @@ def __testing():
     
     # sample 3
     seed = 0
-    emb = 'RANDOM'  # PERFECT / IMPERFECT / RANDOM
+    emb = 'PERFECT_TEXT'  # PERFECT / IMPERFECT / RANDOM / NONE / PERFECT_TEXT / IMPERFECT_TEXT
     conifgSample3 = {
         'trainDatasetFilePath': f"dataset/sample3/train_seed{seed}_{emb}.dataset",
         'testDatasetFilePath': f"dataset/sample3/train_seed{seed}_{emb}.dataset",
         'inputSetSize' : 5,
         'outputSetSize' : 3,
+        'max_lengths' : ([4,30] if emb in ["NONE","PERFECT_TEXT","IMPERFECT_TEXT"] else [5]),
+        'nonFloatIndices' : ([1] if emb in ["NONE","PERFECT_TEXT","IMPERFECT_TEXT"] else []),
         'maxInputNum' : 4,
     }
     
     # choose config
-    config = conifgSample1  # conifgSample1 / conifgSample2 / conifgSample3
-    readSize = 1000 # use how many data in training and testing. integer, -1~10000
+    config = conifgSample3  # conifgSample1 / conifgSample2 / conifgSample3
+    readSize = 10000 # use how many data in training and testing. integer, -1~10000
     trainDatasetFilePath = config['trainDatasetFilePath']
     testDatasetFilePath = config['testDatasetFilePath']
     inputSetSize, outputSetSize = config['inputSetSize'], config['outputSetSize']
+    max_lengths = config['max_lengths']  # for padding
+    nonFloatIndices = config['nonFloatIndices']
     maxInputNum = config['maxInputNum']
     
     ''' dataLoader Start (still under testing) '''
@@ -536,7 +486,7 @@ def __testing():
     ''' dataLoader End '''
     
     ''' Directly Dataset Read Start '''
-    encoder = du.Encoder.BinaryEntryEncoder(inputSetSize,outputSetSize)
+    encoder = du.Encoder.BinaryEntryEncoder(inputSetSize,outputSetSize, nonFloatIndices = nonFloatIndices)
     maxXForNormalization = None
     with open(trainDatasetFilePath,"r") as trainDatasetFile:
         inputSetSize = encoder.getInputSetSize()
@@ -544,7 +494,7 @@ def __testing():
         trainDatasetX = []
         trainDatasetY = []
         for line in trainDatasetFile: 
-            entry = du.DatasetUtility.Entry.createFromTextFormat(line, inputSetSize, outputSetSize)
+            entry = du.DatasetUtility.Entry.createFromTextFormat(line, inputSetSize, outputSetSize, nonFloatIndices)
             x,y = encoder.encode(entry)
             trainDatasetX.append(x)
             trainDatasetY.append(y)
@@ -552,12 +502,15 @@ def __testing():
             trainDatasetX = trainDatasetX[:readSize]
             trainDatasetY = trainDatasetY[:readSize]
 
-        trainDatasetX = np.array(trainDatasetX)
+        trainDatasetX = [np.vstack([np.pad(arr,(0,max_length-len(arr)),mode="constant", constant_values=0) for arr in item]) for item,max_length in zip(zip(*trainDatasetX),max_lengths)]
+
         trainDatasetY = [np.vstack(item) for item in zip(*trainDatasetY)]
         if maxXForNormalization is None:
-            maxXForNormalization = np.max(trainDatasetX, axis=0)
+            maxXForNormalization = np.max(trainDatasetX[0], axis=0)
     
-    trainDatasetX = trainDatasetX / maxXForNormalization
+    print(trainDatasetX)
+    
+    trainDatasetX[0] = trainDatasetX[0] / maxXForNormalization
 
     with open(testDatasetFilePath,"r") as testDatasetFile:
         inputSetSize = encoder.getInputSetSize()
@@ -565,7 +518,7 @@ def __testing():
         testDatasetX = []
         testDatasetY = []
         for line in testDatasetFile: 
-            entry = du.DatasetUtility.Entry.createFromTextFormat(line, inputSetSize, outputSetSize)
+            entry = du.DatasetUtility.Entry.createFromTextFormat(line, inputSetSize, outputSetSize, nonFloatIndices)
             x,y = encoder.encode(entry)
             testDatasetX.append(x)
             testDatasetY.append(y)
@@ -573,15 +526,15 @@ def __testing():
             testDatasetX = testDatasetX[:readSize]
             testDatasetY = testDatasetY[:readSize]
 
-        testDatasetX = np.array(testDatasetX)
+        testDatasetX = [np.vstack([np.pad(arr,(0,max_length-len(arr)),mode="constant", constant_values=0) for arr in item]) for item,max_length in zip(zip(*testDatasetX),max_lengths)]
         testDatasetY = [np.vstack(item) for item in zip(*testDatasetY)]
-        testDatasetX = testDatasetX / maxXForNormalization
+        testDatasetX[0] = testDatasetX[0] / maxXForNormalization
 
     # transform data to tensor
-    trainDatasetX = torch.from_numpy(trainDatasetX).to(device=DEVICE, dtype=torch.float)
-    testDatasetX = torch.from_numpy(testDatasetX).to(device=DEVICE, dtype=torch.float)
-    print(trainDatasetX[0])
-    #print(trainDatasetX.shape)
+    trainDatasetX = [torch.from_numpy(item).to(device=DEVICE) for item in trainDatasetX]
+    testDatasetX = [torch.from_numpy(item).to(device=DEVICE) for item in testDatasetX]
+    # print(trainDatasetX[0])
+    # print(trainDatasetX.shape)
     # trainDatasetX shape = [readSize, encoder.getInputDim()]
     trainDatasetY = [torch.from_numpy(item).to(device=DEVICE, dtype=torch.float) for item in trainDatasetY]
     testDatasetY = [torch.from_numpy(item).to(device=DEVICE, dtype=torch.float) for item in testDatasetY]
@@ -590,11 +543,16 @@ def __testing():
     ''' Directly Dataset Read End '''
 
     # create NN model
-    model = BinaryModel(encoder, encoder.getRelDim())
+    hidden_dim = encoder.getRelDim()
+    embedding_dim = 8
+    model = BinaryModel(encoder, hidden_dim, embedding_dim)
     model.to(device=DEVICE)
     
     # training
+    start_time = time.time()
     train(model, encoder, trainDatasetX, trainDatasetY, testDatasetX, testDatasetY)
+    end_time = time.time()
+    print(f"Training Elapsed time: {end_time - start_time:3f} seconds")
 
     # testing
     model.eval()
@@ -604,12 +562,11 @@ def __testing():
         #rounded_test_outputs = torch.round(process_output(test_outputs[0][0],eps))
         ''' show some case '''
         caseIndices = [0]  # [...]
-        # for caseIndex in caseIndices:
-            # print(f'case {caseIndex}: ')
-            # print(torch.round(test_outputs[caseIndex]).view(-1))
-            # print(testDatasetY[0][caseIndex].view(-1))
+        for caseIndex in caseIndices:
+            print(f'case {caseIndex}: ')
+            print(torch.round(test_outputs[caseIndex]).view(-1))
+            print(testDatasetY[0][caseIndex].view(-1))
 
-            # print(test_outputs[1][caseIndex].view(-1))
-            # print(testDatasetY[1][caseIndex].view(-1))
-        
-__testing()
+
+if __name__ == "__main__":       
+    __testing()
