@@ -355,12 +355,12 @@ class Encoder:
             entry = DatasetUtility.Entry(self._inputSetSize, self._outputSetSize)
             fixedLenInputs, *variableLenInputs, y = encoded_entry
             
-            for inputIndex, value in enumerate(fixedLenInputs):
-                entry.putInputValue(inputIndex, value)
+            # for inputIndex, value in enumerate(fixedLenInputs):
+            #     entry.putInputValue(inputIndex, value)
             
-            for i in range(len(variableLenInputs)):
-                byte_values = variableLenInputs[i].astype('uint8').tobytes()
-                entry.putInputValue(i + len(fixedLenInputs), byte_values.decode('utf-8'))
+            # for i in range(len(variableLenInputs)):
+            #     byte_values = variableLenInputs[i].astype('uint8').tobytes()
+            #     entry.putInputValue(i + len(fixedLenInputs), byte_values.decode('utf-8'))
             
             y = y.reshape((self._outputSetSize, self._inputSetSize))
             
