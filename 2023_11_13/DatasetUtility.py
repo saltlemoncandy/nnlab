@@ -351,7 +351,7 @@ class Encoder:
             return ([fixedLenInputs,*variableLenInputs],[y])
         
         def decode(self, encoded_entry:np.ndarray)->DatasetUtility.Entry:
-            # not implemented now
+            # not implemented now            
             pass
         
         def getInputDim(self)->int:
